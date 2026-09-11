@@ -135,4 +135,4 @@ View форматирует строки через Strings/RewardText. Русс
 
 Проверки включают 108 Lua-спецификаций, четыре сценария настоящего headless Defold, три проверки файловых блокировок и production WebGL debug/release. Дополнительный режим tools/run-tests.ps1 -Profile измеряет настоящий Presenter/GUI/mesh/локальные файлы при обычной и стресс-нагрузке; GPU и полный engine frame в него не входят.
 
-Команды проверки: [README](../README.md#проверки). Контракты для расширения и интеграции: [SERVICE_CONTRACT.md](SERVICE_CONTRACT.md).
+Запуск проверок: [tools/run-tests.ps1](../tools/run-tests.ps1). Контракты для расширения и интеграции: [SERVICE_CONTRACT.md](SERVICE_CONTRACT.md).
