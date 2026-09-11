@@ -1,0 +1,60 @@
+local Config = require "scripts.domain.config"
+local Registry = require "scripts.domain.rewards.registry"
+local Session = require "scripts.domain.session"
+local Repository = require "scripts.infrastructure.session_repository"
+local Storage = require "scripts.infrastructure.defold_storage"
+local Service = require "scripts.application.local_game_service"
+local registry = Registry.New(require "config.reward_types")
+local config = assert(Config.Validate(require "config.game", registry))
+
+local function signal(self, name)
+    local file = assert(io.open(self.directory .. "/" .. name, "wb"))
+    assert(file:write("ready")); assert(file:close())
+end
+
+local function createService(self)
+    return Service.New(config, registry, Repository.New(config, registry, self.storage), {Now = function() return 0 end})
+end
+
+function init(self)
+    self.directory = assert(sys.get_config_string("storage_qa.directory"), "Explicit isolated fixture directory required")
+    self.storage = Storage.New()
+    self.storage.Path = function(storage, app, name) return self.directory .. "/" .. name end
+    assert(self.storage:Read(self.directory .. "/absent").Status == "missing")
+    local session = Session.New(config, 0, nil, registry)
+    session.RewardState.points.Data.Balance = 900
+    for index, suffix in ipairs({"a", "b"}) do
+        local path = self.directory .. "/session-v3-" .. suffix
+        assert(sys.save(path, {Version = 3, Revision = 10 - index, Payload = Session.Snapshot(session)}))
+        assert(self.storage:Read(path).Value.Payload.RewardState.points.Data.Balance == 900)
+    end
+    self.phase = 0
+    signal(self, "ready")
+end
+
+function update(self)
+    if self.phase == 0 and sys.exists(self.directory .. "/locked") then
+        self.service = createService(self)
+        self.service:Open()
+        assert(self.service:GetState().Phase == "failed", "Unread slot must block startup even with a valid backup")
+        self.phase = 1
+        signal(self, "loaded")
+    elseif self.phase == 1 and sys.exists(self.directory .. "/unlocked") then
+        self.service:Update(1); self.service:Resume(); self.service:Execute({Kind = "Grant"}); self.service:Dispose()
+        for index, suffix in ipairs({"a", "b"}) do
+            local saved = sys.load(self.directory .. "/session-v3-" .. suffix)
+            assert(saved.Payload.RewardState.points.Data.Balance == 900 and saved.Revision == 10 - index,
+                "Failed startup must preserve both original slots after unlock")
+        end
+        local restored = createService(self)
+        restored:Open(); assert(restored:GetState().Model.Score == 900); restored:Dispose()
+        local file = assert(io.open(self.directory .. "/session-v3-a", "wb"))
+        assert(file:write("broken save")); assert(file:close())
+        assert(self.storage:Read(self.directory .. "/session-v3-a").Status == "corrupt")
+        local recovered = createService(self)
+        recovered:Open(); assert(recovered:GetState().Model.Score == 900); recovered:Dispose()
+        print("[Storage QA] SUCCESS: real read lock preserves slots; restart and corrupt backup recovery passed")
+        self.phase = 2
+        sys.exit(0)
+    end
+end

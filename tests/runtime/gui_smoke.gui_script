@@ -1,0 +1,204 @@
+-- Runs with the real Defold GUI/font/render APIs, isolated from player saves.
+-- It is a separate bootstrap collection and is never referenced by the game.
+local Config = require "scripts.domain.config"
+local Session = require "scripts.domain.session"
+local Board = require "scripts.simulation.board"
+local Flight = require "scripts.simulation.flight"
+local Widgets = require "scripts.ui.widgets"
+local BoardView = require "scripts.ui.board_view"
+local Hud = require "scripts.ui.hud"
+local Strings = require "scripts.ui.strings"
+local sourceConfig = require "config.game"
+local Registry = require "scripts.domain.rewards.registry"
+local RewardText = require "scripts.ui.reward_text"
+local rewardTypes = require "config.reward_types"
+local rewardRegistry = Registry.New(rewardTypes)
+local stressCount = 1024
+
+local function assertNear(actual, expected)
+    assert(math.abs(actual - expected) < 0.001, tostring(actual) .. " ~= " .. tostring(expected))
+end
+
+local function configuration(count)
+    local raw = {}
+    for key, value in pairs(sourceConfig) do raw[key] = value end
+    raw.InitialBalls, raw.BatchSize = stressCount, 128
+    raw.Baskets = {}
+    for index = 1, count do
+        raw.Baskets[index] = {Id = "bin" .. index, Weight = index, Rewards = {{Type = "points", Amount = 1000000}}, Color = "80F5C5"}
+        if count == 3 then
+            raw.Baskets[index].Rewards[2] = {Type = "balls", Amount = 1}
+            raw.Baskets[index].Rewards[3] = {Type = "item", ItemId = "leaf", Name = "Лист", Amount = 1}
+        end
+    end
+    return assert(Config.Validate(raw, rewardRegistry))
+end
+
+local function checkFontMetrics(root)
+    local node = Widgets.Text(root, 360, 900, "9 007 199 254 740 991", 40, "FFFFFF", nil, "heading")
+    Widgets.FitText(node, 34, 40, 238)
+    local font = gui.get_font_resource(gui.get_font(node))
+    local metrics = resource.get_text_metrics(font, gui.get_text(node))
+    assert(metrics.width > 0, "Loaded font must have measurable glyphs")
+    assert(gui.get_scale(node).x * metrics.width <= 238.001, "Score exceeds card width")
+    gui.set_text(node, "")
+    Widgets.FitText(node, 34, 40, 238)
+    assertNear(gui.get_scale(node).x, 34 / 40)
+    gui.delete_node(node)
+end
+
+local function addDrops(self, count)
+    for index, drop in ipairs(assert(Session.Drop(self.session, count, 100))) do
+        local flight = Flight.New(self.board, drop)
+        self.flights[#self.flights + 1] = {Flight = flight, Visual = BoardView.Acquire(self.view, flight)}
+        self.expectedScore = self.expectedScore + drop.Rewards[1].Amount
+    end
+end
+
+local function buildBoard(self, count)
+    self.root = Widgets.Group(gui.get_node("root"), -360, -540)
+    self.config = configuration(count)
+    self.board = Board.New(count)
+    self.session = Session.New(self.config, 100, nil, rewardRegistry)
+    checkFontMetrics(self.root)
+    self.rewardText = RewardText.New(rewardTypes, Strings.New("ru"))
+    self.view = BoardView.New(self.root, self.board, self.config, self.rewardText)
+    self.hud = Hud.New(self.root, self.config, Strings.New("ru"), self.rewardText)
+    Hud.Update(self.hud, Session.View(self.session), 0)
+    assert(self.hud.Buttons.Drop.Enabled, "Single drop must start enabled")
+    local blocked = Session.View(self.session)
+    blocked.SavingBlocked = true
+    blocked.ServiceBusy = true
+    Hud.Update(self.hud, blocked, 10)
+    assert(gui.get_text(self.hud.Status) == self.hud.Text("SaveError"),
+        "Save failure must remain visible after ordinary toast expiry")
+    assert(not self.hud.Buttons.Drop.Enabled and not self.hud.Buttons.Batch.Enabled
+        and not self.hud.Buttons.Grant.Enabled)
+    Hud.Update(self.hud, Session.View(self.session), 0)
+    Widgets.Press(self.hud.Buttons.Drop, true)
+    Widgets.Press(self.hud.Buttons.Drop, false)
+    Hud.ToggleStats(self.hud)
+    assert(self.hud.StatsOpen == true)
+    Hud.ToggleStats(self.hud)
+    assert(self.hud.StatsOpen == false)
+    self.flights, self.expectedScore = {}, 0
+    addDrops(self, 32)
+    BoardView.Flush(self.view, true)
+    addDrops(self, stressCount - 32 - self.config.BatchSize)
+    Hud.Update(self.hud, Session.View(self.session), 0)
+    assert(self.hud.Buttons.Drop.Enabled and self.hud.Buttons.Batch.Enabled,
+        "Active flights must not disable single or batch drops")
+    addDrops(self, self.config.BatchSize)
+    BoardView.Flush(self.view, true)
+    assert(self.view.Renderer.DrawnCount == stressCount, "Every active ball must be rendered")
+    assert(self.view.Renderer.Capacity >= stressCount, "Vertex buffer must grow beyond GUI pool limits")
+    local staging = self.view.Renderer.data
+    BoardView.Flush(self.view, true)
+    assert(not self.view.Renderer.dirty and self.view.Renderer.data == staging,
+        "Unchanged frames must retain the uploaded staging buffer")
+    BoardView.Flush(self.view, false)
+    assert(self.view.Renderer.DrawnCount == 0, "Balls must not draw above the stats panel")
+    BoardView.Flush(self.view, true)
+    assert(self.view.Renderer.DrawnCount == stressCount)
+    -- Exercise actual engine serialization in the disposable build directory.
+    -- These paths cannot access either player save slot.
+    local path = "build/qa-headless/pending-" .. count .. ".test-save"
+    sys.save(path, Session.Snapshot(self.session))
+    local restored = Session.New(self.config, 100, sys.load(path), rewardRegistry)
+    assert(not restored.RestoreError and #restored.Pending == stressCount,
+        "Real save/load must retain more than 128 pending drops")
+    Hud.Update(self.hud, Session.View(self.session), 0)
+    assert(not self.hud.Buttons.Drop.Enabled, "Exhausted inventory must disable drops")
+end
+
+local function settleBoard(self)
+    for index, item in ipairs(self.flights) do
+        local contacts = Flight.Update(item.Flight, 60)
+        for contactIndex, pegIndex in ipairs(contacts) do BoardView.Contact(self.view, pegIndex) end
+        BoardView.Move(item.Visual, item.Flight, 1 / 60)
+        assert(item.Flight.Done, "Flight must end inside its selected basket")
+        assert(Session.Land(self.session, item.Flight.Id))
+        local result = assert(Session.Complete(self.session, item.Flight.Id))
+        BoardView.Land(self.view, result)
+        BoardView.Release(item.Visual)
+        assert(Session.Complete(self.session, item.Flight.Id) == nil, "Duplicate settlement must be ignored")
+    end
+    local view = Session.View(self.session, true)
+    assert(view.Score == self.expectedScore and view.TotalHits == stressCount and view.ActiveCount == 0)
+    BoardView.Flush(self.view, true)
+    assert(self.view.Renderer.DrawnCount == 0)
+    assert(self.view.Renderer.Capacity == 32, "An empty board must release peak upload capacity")
+    assert(#self.view.Renderer.free <= 32, "Released visuals must not retain the peak population")
+    Hud.Update(self.hud, view, 0)
+    Hud.ToggleStats(self.hud, true)
+    Hud.DrawDebug(self.hud, view)
+    assert(gui.get_text(self.hud.StatCells[1]):find("СЧЁТ", 1, true))
+    assert(gui.get_text(self.hud.StatCells[4]) == "ВЫДАНО НАГРАД 1024")
+    assert(gui.get_text(self.hud.StatCells[5]) == "КОРЗИНА / НАГРАДА")
+    assert(gui.get_text(self.hud.StatCells[6]) == "ПОПАДАНИЯ")
+    assert(gui.is_enabled(self.hud.StatCells[5]), "Russian labels must be visible in debug builds")
+    -- Also exercise the GUI fallback with a debug engine: the release engine
+    -- has no system debug font and must use real localized GUI text instead.
+    self.hud.NativeDebug = false
+    Hud.DrawDebug(self.hud, view)
+    assert(#self.hud.StatCells == 8 + #self.config.Baskets * 4)
+    assert(gui.is_enabled(self.hud.StatCells[10]), "Numeric fallback must be visible without the debug font")
+    if #self.config.Baskets == 3 then
+        assert(view.Balls == stressCount and view.RewardState.item.Data.Counts.leaf == stressCount)
+        assert(gui.get_text(self.hud.RewardInventory) == "Предметы: Лист x1024")
+        assert(gui.get_text(self.hud.StatCells[9]):find("Лист x1", 1, true))
+        local path = "build/qa-headless/mixed-rewards.test-save"
+        sys.save(path, Session.Snapshot(self.session))
+        local restored = Session.New(self.config, 100, sys.load(path), rewardRegistry)
+        assert(restored.RewardState.item.Data.Names.leaf == "Лист")
+        assert(restored.RewardState.item.Data.Counts.leaf == stressCount)
+        print("[Plinko QA] PASS composite points/balls/items, Russian presentation and real serialization")
+    end
+    print("[Plinko QA] PASS GUI/font/mesh/save/settlement/Russian stats with " .. #self.config.Baskets .. " baskets and " .. stressCount .. " balls")
+end
+
+local function step(self)
+    if self.phase == 0 then
+        buildBoard(self, self.counts[self.caseIndex])
+        self.phase = 1
+    elseif self.phase == 1 then
+        settleBoard(self)
+        self.phase = 2
+    else
+        BoardView.Dispose(self.view)
+        gui.delete_node(self.root)
+        self.caseIndex = self.caseIndex + 1
+        self.phase = 0
+        if self.caseIndex > #self.counts then
+            print("[Plinko QA] SUCCESS: real engine integration checks passed")
+            self.finished = true
+            sys.exit(0)
+        end
+    end
+end
+
+function init(self)
+    self.counts, self.caseIndex, self.phase = {2, 10, 16, 3}, 1, 0
+end
+
+function update(self)
+    if self.finished then return end
+    local ok, failure = xpcall(function()
+        if sys.get_config_string("qa.profile", "0") == "1" then
+            local Profile = require "tests.runtime.profile"
+            self.profile = self.profile or Profile.New(gui.get_node("root"))
+            if Profile.Update(self.profile) then self.finished = true; sys.exit(0) end
+        else
+            step(self)
+        end
+    end, debug.traceback)
+    if not ok then
+        print("[Plinko QA] FAIL: " .. tostring(failure))
+        self.finished = true
+        sys.exit(1)
+    end
+end
+
+function final(self)
+    if self.profile then require("tests.runtime.profile").Dispose(self.profile) end
+end

@@ -1,0 +1,20 @@
+script: "/main/main.gui_script"
+fonts {
+  name: "body"
+  font: "/assets/fonts/body.font"
+}
+fonts {
+  name: "heading"
+  font: "/assets/fonts/heading.font"
+}
+material: "/builtins/materials/gui.material"
+adjust_reference: ADJUST_REFERENCE_PARENT
+max_nodes: 4096
+nodes {
+  position { x: 360.0 y: 540.0 }
+  size { x: 720.0 y: 1080.0 }
+  type: TYPE_BOX
+  id: "root"
+  adjust_mode: ADJUST_MODE_FIT
+  visible: false
+}

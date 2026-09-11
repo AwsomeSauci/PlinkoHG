@@ -1,0 +1,9 @@
+name: "plinko_balls"
+tags: "plinko_balls"
+vertex_program: "/assets/render/balls.vp"
+fragment_program: "/assets/render/balls.fp"
+vertex_space: VERTEX_SPACE_LOCAL
+vertex_constants {
+  name: "mtx_worldview_proj"
+  type: CONSTANT_TYPE_WORLDVIEWPROJ
+}

@@ -1,0 +1,5 @@
+[bootstrap]
+main_collection = /tests/storage_runtime/main.collectionc
+
+[project]
+title = PlinkoStorageQA

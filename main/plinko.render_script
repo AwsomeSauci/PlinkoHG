@@ -1,0 +1,44 @@
+local Theme = require "scripts.ui.theme"
+local logicalWidth, logicalHeight = 720, 1080
+
+function init(self)
+    self.guiPredicate = render.predicate({"gui"})
+    self.debugPredicate = render.predicate({"debug_text"})
+    self.ballsPredicate = render.predicate({"plinko_balls"})
+    self.view = vmath.matrix4()
+    self.debugProjection = vmath.matrix4_orthographic(0, logicalWidth, 0, logicalHeight, -1, 1)
+    self.clear = {
+        [graphics.BUFFER_TYPE_COLOR0_BIT] = Theme.Color(Theme.Background),
+        [graphics.BUFFER_TYPE_DEPTH_BIT] = 1,
+        [graphics.BUFFER_TYPE_STENCIL_BIT] = 0,
+    }
+end
+
+function update(self)
+    local width, height = render.get_window_width(), render.get_window_height()
+    if width <= 0 or height <= 0 then return end
+    render.set_depth_mask(true)
+    render.set_stencil_mask(0xff)
+    render.clear(self.clear)
+    render.set_depth_mask(false)
+    render.disable_state(graphics.STATE_DEPTH_TEST)
+    render.disable_state(graphics.STATE_CULL_FACE)
+    render.enable_state(graphics.STATE_BLEND)
+    render.set_blend_func(graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+    render.set_view(self.view)
+    render.set_viewport(0, 0, width, height)
+    render.set_projection(vmath.matrix4_orthographic(0, width, 0, height, -1, 1))
+    render.enable_state(graphics.STATE_STENCIL_TEST)
+    render.draw(self.guiPredicate)
+    render.disable_state(graphics.STATE_STENCIL_TEST)
+
+    -- Match the FIT GUI root so debug-text coordinates have the same logical
+    -- scale on desktop, portrait devices, landscape and high-DPI windows.
+    local scale = math.min(width / logicalWidth, height / logicalHeight)
+    local viewportWidth, viewportHeight = math.floor(logicalWidth * scale), math.floor(logicalHeight * scale)
+    render.set_viewport(math.floor((width - viewportWidth) / 2), math.floor((height - viewportHeight) / 2), viewportWidth, viewportHeight)
+    render.set_projection(self.debugProjection)
+    render.draw(self.ballsPredicate)
+    render.draw(self.debugPredicate)
+    render.disable_state(graphics.STATE_BLEND)
+end

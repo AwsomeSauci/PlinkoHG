@@ -1,0 +1,28 @@
+mouse_trigger {
+  input: MOUSE_BUTTON_1
+  action: "touch"
+}
+key_trigger {
+  input: KEY_SPACE
+  action: "drop_one"
+}
+key_trigger {
+  input: KEY_B
+  action: "drop_batch"
+}
+key_trigger {
+  input: KEY_G
+  action: "grant"
+}
+key_trigger {
+  input: KEY_D
+  action: "toggle_stats"
+}
+key_trigger {
+  input: KEY_M
+  action: "toggle_sound"
+}
+key_trigger {
+  input: KEY_ESC
+  action: "dismiss"
+}

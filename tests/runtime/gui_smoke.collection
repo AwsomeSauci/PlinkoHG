@@ -1,0 +1,5 @@
+name: "gui_smoke"
+instances {
+  id: "smoke"
+  prototype: "/tests/runtime/gui_smoke.go"
+}

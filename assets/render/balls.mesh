@@ -1,0 +1,4 @@
+material: "/assets/render/balls.material"
+vertices: "/assets/render/balls.buffer"
+primitive_type: PRIMITIVE_TRIANGLES
+position_stream: "position"

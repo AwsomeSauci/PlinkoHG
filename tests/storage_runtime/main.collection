@@ -1,0 +1,5 @@
+name: "storage_qa"
+instances {
+  id: "test"
+  prototype: "/tests/storage_runtime/main.go"
+}
